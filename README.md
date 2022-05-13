@@ -29,7 +29,7 @@ To setup a conda environment, download example training data, begin the training
 conda env create -f environment.yml
 conda activate nerf
 bash download_example_data.sh
-python run_nerf.py --config config_fern.txt
+python run_nerf.py --config config_lego.txt
 tensorboard --logdir=logs/summaries --port=6006
 ```
 If everything works without errors, you can now go to `localhost:6006` in your browser and watch the "Fern" scene train.

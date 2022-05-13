@@ -1,0 +1,11 @@
+https://docs.openvino.ai/latest/openvino_docs_MO_DG_prepare_model_convert_model_Convert_Model_From_TensorFlow.html#convert-tensorflow-2-models
+
+cd model_fine_300000
+mkdir xml
+cd xml
+mo --saved_model_dir ../ 
+
+cd model_300000
+mkdir xml
+cd xml
+mo --saved_model_dir ../ 
