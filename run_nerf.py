@@ -25,6 +25,18 @@ if gpus:
         print(e)
 
 
+def batchify_model(fn, chunk):
+    """Constructs a version of 'fn' that applies to smaller batches."""
+    if chunk is None:
+        return fn
+    def ret(inputs):
+        rets = []
+        for i in range(0, inputs.shape[0], chunk):
+            out = fn(inputs[i:i+chunk])[list(fn.structured_outputs.keys())[0]]
+            rets.append(out)
+        return tf.concat(rets, 0)
+    return ret
+
 def batchify(fn, chunk):
     """Constructs a version of 'fn' that applies to smaller batches."""
     if chunk is None:
@@ -35,7 +47,7 @@ def batchify(fn, chunk):
     return ret
 
 
-def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
+def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64, load_model=False):
     """Prepares inputs and applies network 'fn'."""
 
     inputs_flat = tf.reshape(inputs, [-1, inputs.shape[-1]])
@@ -47,7 +59,10 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = tf.concat([embedded, embedded_dirs], -1)
 
-    outputs_flat = batchify(fn, netchunk)(embedded)
+    if load_model:
+        outputs_flat = batchify_model(fn, netchunk)(embedded)
+    else:
+        outputs_flat = batchify(fn, netchunk)(embedded)
     outputs = tf.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     return outputs
 
@@ -63,7 +78,9 @@ def render_rays(ray_batch,
                 network_fine=None,
                 white_bkgd=False,
                 raw_noise_std=0.,
-                verbose=False):
+                verbose=False, 
+                infer_model=None,
+                infer_model_fine=None):
     """Volumetric rendering.
 
     Args:
@@ -114,7 +131,8 @@ def render_rays(ray_batch,
         """
         # Function for computing density from model prediction. This value is
         # strictly between [0, 1].
-        def raw2alpha(raw, dists, act_fn=tf.nn.relu): return 1.0 - tf.exp(-act_fn(raw) * dists)
+        def raw2alpha(raw, dists, act_fn=tf.nn.relu): 
+            return 1.0 - tf.exp(-act_fn(raw) * dists)
 
         # Compute 'distance' (in time) between each integration time along a ray.
         dists = z_vals[..., 1:] - z_vals[..., :-1]
@@ -204,7 +222,10 @@ def render_rays(ray_batch,
     pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]  # [N_rays, N_samples, 3]
 
     # Evaluate model at each point.
-    raw = network_query_fn(pts, viewdirs, network_fn)  # [N_rays, N_samples, 4]
+    if infer_model:
+        raw = network_query_fn(pts, viewdirs, infer_model, load_model=True)
+    else:
+        raw = network_query_fn(pts, viewdirs, network_fn, load_model=False)  # [N_rays, N_samples, 4]
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d)
 
     if N_importance > 0:
@@ -222,7 +243,10 @@ def render_rays(ray_batch,
 
         # Make predictions with network_fine.
         run_fn = network_fn if network_fine is None else network_fine
-        raw = network_query_fn(pts, viewdirs, run_fn)
+        if infer_model_fine:
+            raw = network_query_fn(pts, viewdirs, infer_model_fine, load_model=True)
+        else:
+            raw = network_query_fn(pts, viewdirs, run_fn, load_model=False)
         rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d)
 
     ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map}
@@ -244,7 +268,6 @@ def replacenan(t):
     """Tensor NaN replacement"""
     return tf.where(tf.math.is_nan(t), tf.zeros_like(t), t)
 
-
 def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
     """Render rays in smaller minibatches to avoid OOM."""
     all_ret = {}
@@ -257,7 +280,6 @@ def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
 
     all_ret = {k: tf.concat(all_ret[k], 0) for k in all_ret}
     return all_ret
-
 
 def render(H, W, focal,
            chunk=1024*32, rays=None, c2w=None, ndc=True,
@@ -401,13 +423,14 @@ def create_nerf(args):
         grad_vars += model_fine.trainable_variables
         models['model_fine'] = model_fine
 
-    def network_query_fn(inputs, viewdirs, network_fn): 
+    def network_query_fn(inputs, viewdirs, network_fn, load_model=False): 
         return run_network( inputs, 
                             viewdirs, 
                             network_fn,
                             embed_fn=embed_fn,
                             embeddirs_fn=embeddirs_fn,
-                            netchunk=args.netchunk)
+                            netchunk=args.netchunk,
+                            load_model=load_model)
 
     render_kwargs_train = {
         'network_query_fn': network_query_fn,
@@ -688,9 +711,8 @@ def train():
         infer_model_fine = loaded_model_fine.signatures["serving_default"]
         print(list(loaded_model_fine.signatures.keys()), infer_model_fine.structured_outputs)  # ["serving_default"]
 
-
-        infer_dict = {'infer_model': infer_model, 'infer_model_refine': infer_model_fine,}
-        #render_kwargs_test.update(infer_dict)
+        infer_dict = {'infer_model': infer_model, 'infer_model_fine': infer_model_fine,}
+        render_kwargs_test.update(infer_dict)
 
         if args.render_test: # render_test switches to test poses
             images = images[i_test]
