@@ -71,7 +71,8 @@ def get_embedder(multires, i=0):
     }
 
     embedder_obj = Embedder(**embed_kwargs)
-    def embed(x, eo=embedder_obj): return eo.embed(x)
+    def embed(x, eo=embedder_obj): 
+        return eo.embed(x)
     return embed, embedder_obj.out_dim
 
 
@@ -80,10 +81,16 @@ def get_embedder(multires, i=0):
 def init_nerf_model(D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False):
 
     relu = tf.keras.layers.ReLU()
-    def dense(W, act=relu): return tf.keras.layers.Dense(W, activation=act)
+    def dense(W, act=relu): 
+        return tf.keras.layers.Dense(W, activation=act)
 
-    print('MODEL', input_ch, input_ch_views, type(
-        input_ch), type(input_ch_views), use_viewdirs)
+    print(  'MODEL', 
+            input_ch, 
+            input_ch_views, 
+            type(input_ch), 
+            type(input_ch_views), 
+            use_viewdirs)
+            
     input_ch = int(input_ch)
     input_ch_views = int(input_ch_views)
 

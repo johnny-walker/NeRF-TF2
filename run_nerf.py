@@ -401,11 +401,13 @@ def create_nerf(args):
         grad_vars += model_fine.trainable_variables
         models['model_fine'] = model_fine
 
-    def network_query_fn(inputs, viewdirs, network_fn): return run_network(
-        inputs, viewdirs, network_fn,
-        embed_fn=embed_fn,
-        embeddirs_fn=embeddirs_fn,
-        netchunk=args.netchunk)
+    def network_query_fn(inputs, viewdirs, network_fn): 
+        return run_network( inputs, 
+                            viewdirs, 
+                            network_fn,
+                            embed_fn=embed_fn,
+                            embeddirs_fn=embeddirs_fn,
+                            netchunk=args.netchunk)
 
     render_kwargs_train = {
         'network_query_fn': network_query_fn,
@@ -433,6 +435,7 @@ def create_nerf(args):
     basedir = args.basedir
     expname = args.expname
 
+    # load weights
     if args.ft_path is not None and args.ft_path != 'None':
         ckpts = [args.ft_path]
     else:
@@ -668,9 +671,27 @@ def train():
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)
 
+    global_step = tf.compat.v1.train.get_or_create_global_step()
+    global_step.assign(start)
+
     # Short circuit if only rendering out from trained model
     if args.render_only:
         print('RENDER ONLY')
+        # load models from saved_model
+        export_model = os.path.join(basedir, expname, '{}_{:06d}'.format('saved', global_step.numpy()-1))
+        loaded_model = tf.saved_model.load(export_model)
+        infer_model = loaded_model.signatures["serving_default"]
+        print(list(loaded_model.signatures.keys()), infer_model.structured_outputs)  # ["serving_default"]
+
+        export_model_fine = os.path.join(basedir, expname, '{}_{:06d}'.format('saved_fine', global_step.numpy()-1))
+        loaded_model_fine = tf.saved_model.load(export_model_fine)
+        infer_model_fine = loaded_model_fine.signatures["serving_default"]
+        print(list(loaded_model_fine.signatures.keys()), infer_model_fine.structured_outputs)  # ["serving_default"]
+
+
+        infer_dict = {'infer_model': infer_model, 'infer_model_refine': infer_model_fine,}
+        #render_kwargs_test.update(infer_dict)
+
         if args.render_test: # render_test switches to test poses
             images = images[i_test]
         else: # Default is smoother render_poses path
@@ -678,11 +699,11 @@ def train():
 
         testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
         os.makedirs(testsavedir, exist_ok=True)
+        render_poses = render_poses[::10]    #step=10
         print('test poses shape', render_poses.shape)
-
         rgbs, _ = render_path(render_poses, hwf, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
         print('Done rendering', testsavedir)
-        imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
+        #imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
         return
 
@@ -692,9 +713,6 @@ def train():
         lrate = tf.keras.optimizers.schedules.ExponentialDecay(lrate, decay_steps=args.lrate_decay * 1000, decay_rate=0.1)
     optimizer = tf.keras.optimizers.Adam(lrate)
     models['optimizer'] = optimizer
-
-    global_step = tf.compat.v1.train.get_or_create_global_step()
-    global_step.assign(start)
 
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
@@ -882,10 +900,12 @@ def train():
 
         global_step.assign_add(1)
     
-    # freeze models, save as pb
+    print('freeze models, save as pb')
     for k in ['model', 'model_fine']:
-        export_dir = os.path.join(basedir, expname, '{}_{:06d}'.format(k, global_step.numpy()-1))
-        tf.saved_model.save( models[k], export_dir, signatures=None, options=None)
+        saved = 'saved' if k=='model' else 'saved_fine'
+        export_dir = os.path.join(basedir, expname, '{}_{:06d}'.format(saved, global_step.numpy()-1))
+        if not os.path.exists(export_dir):
+            tf.saved_model.save( models[k], export_dir, signatures=None, options=None)
 
 if __name__ == '__main__':
     train()
