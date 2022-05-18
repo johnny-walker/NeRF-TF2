@@ -31,9 +31,12 @@ def batchify_model(fn, chunk):
         return fn
     def ret(inputs):
         rets = []
+        t = time.time()
+        print(inputs.shape)
         for i in range(0, inputs.shape[0], chunk):
             out = fn(inputs[i:i+chunk])[list(fn.structured_outputs.keys())[0]]
             rets.append(out)
+        print ('inference time', time.time()-t)
         return tf.concat(rets, 0)
     return ret
 
@@ -226,6 +229,7 @@ def render_rays(ray_batch,
         raw = network_query_fn(pts, viewdirs, infer_model, load_model=True)
     else:
         raw = network_query_fn(pts, viewdirs, network_fn, load_model=False)  # [N_rays, N_samples, 4]
+    print('raw out', raw.shape)
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d)
 
     if N_importance > 0:
@@ -270,6 +274,7 @@ def replacenan(t):
 
 def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
     """Render rays in smaller minibatches to avoid OOM."""
+    print('rays_flat', rays_flat.shape)
     all_ret = {}
     for i in range(0, rays_flat.shape[0], chunk):
         ret = render_rays(rays_flat[i:i+chunk], **kwargs)
@@ -721,7 +726,7 @@ def train():
 
         testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
         os.makedirs(testsavedir, exist_ok=True)
-        render_poses = render_poses[::10]    #step=10
+        render_poses = render_poses[::40]    #step=40
         print('test poses shape', render_poses.shape)
         rgbs, _ = render_path(render_poses, hwf, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
         print('Done rendering', testsavedir)
