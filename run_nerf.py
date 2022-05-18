@@ -32,11 +32,11 @@ def batchify_model(fn, chunk):
     def ret(inputs):
         rets = []
         t = time.time()
-        print(inputs.shape)
+        print('batch inputs', inputs.shape)
         for i in range(0, inputs.shape[0], chunk):
             out = fn(inputs[i:i+chunk])[list(fn.structured_outputs.keys())[0]]
             rets.append(out)
-        print ('inference time', time.time()-t)
+        #print ('inference time', time.time()-t)
         return tf.concat(rets, 0)
     return ret
 
@@ -229,7 +229,7 @@ def render_rays(ray_batch,
         raw = network_query_fn(pts, viewdirs, infer_model, load_model=True)
     else:
         raw = network_query_fn(pts, viewdirs, network_fn, load_model=False)  # [N_rays, N_samples, 4]
-    print('raw out', raw.shape)
+    #print('raw out', raw.shape)
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d)
     N_importance = 0 #test code
     if N_importance > 0:
@@ -372,6 +372,7 @@ def render_path(render_poses, hwf, chunk, render_kwargs, gt_imgs=None, savedir=N
         H = H//render_factor
         W = W//render_factor
         focal = focal/render_factor
+        print('render_factor', render_factor, H, W, focal)
 
     rgbs = []
     disps = []
