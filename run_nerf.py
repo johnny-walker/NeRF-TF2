@@ -206,9 +206,9 @@ def render_rays(ray_batch,
         # Space integration times linearly between 'near' and 'far'. Same
         # integration points will be used for all rays.
         z_vals = near * (1.-t_vals) + far * (t_vals)
-    else:
-        # Sample linearly in inverse depth (disparity).
-        z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals))
+    #else:
+    #    # Sample linearly in inverse depth (disparity).
+    #    z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals))
     z_vals = tf.broadcast_to(z_vals, [N_rays, N_samples])
 
     # Perturb sampling time along each ray.
@@ -231,7 +231,7 @@ def render_rays(ray_batch,
         raw = network_query_fn(pts, viewdirs, network_fn, load_model=False)  # [N_rays, N_samples, 4]
     print('raw out', raw.shape)
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d)
-
+    N_importance = 0 #test code
     if N_importance > 0:
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
 
@@ -336,9 +336,9 @@ def render(H, W, focal,
         viewdirs = tf.cast(tf.reshape(viewdirs, [-1, 3]), dtype=tf.float32)
 
     sh = rays_d.shape  # [..., 3]
-    if ndc:
-        # for forward facing scenes
-        rays_o, rays_d = ndc_rays(H, W, focal, tf.cast(1., tf.float32), rays_o, rays_d)
+    #if ndc:
+    #    # for forward facing scenes
+    #    rays_o, rays_d = ndc_rays(H, W, focal, tf.cast(1., tf.float32), rays_o, rays_d)
 
     # Create ray batch
     rays_o = tf.cast(tf.reshape(rays_o, [-1, 3]), dtype=tf.float32)
@@ -376,9 +376,7 @@ def render_path(render_poses, hwf, chunk, render_kwargs, gt_imgs=None, savedir=N
     rgbs = []
     disps = []
 
-    t = time.time()
     for i, c2w in enumerate(render_poses):
-        print(i, time.time() - t)
         t = time.time()
         rgb, disp, acc, _ = render(H, W, focal, chunk=chunk, c2w=c2w[:3, :4], **render_kwargs)
         rgbs.append(rgb.numpy())
@@ -394,6 +392,7 @@ def render_path(render_poses, hwf, chunk, render_kwargs, gt_imgs=None, savedir=N
             rgb8 = to8b(rgbs[-1])
             filename = os.path.join(savedir, '{:03d}.png'.format(i))
             imageio.imwrite(filename, rgb8)
+        print(i, time.time() - t)
 
     rgbs = np.stack(rgbs, 0)
     disps = np.stack(disps, 0)
@@ -456,7 +455,7 @@ def create_nerf(args):
         render_kwargs_train['lindisp'] = args.lindisp
 
     render_kwargs_test = {k: render_kwargs_train[k] for k in render_kwargs_train}
-    render_kwargs_test['perturb'] = False
+    render_kwargs_test['perturb'] = 0
     render_kwargs_test['raw_noise_std'] = 0.
 
     start = 0
@@ -643,8 +642,8 @@ def train():
     elif args.dataset_type == 'blender':
         images, poses, render_poses, hwf, i_split = load_blender_data(args.datadir, args.half_res, args.testskip)
         print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
+        print(i_split)
         i_train, i_val, i_test = i_split
-
         near = 2.
         far = 6.
 
@@ -706,13 +705,13 @@ def train():
     if args.render_only:
         print('RENDER ONLY')
         # load models from saved_model
-        export_model = os.path.join(basedir, expname, '{}_{:06d}'.format('saved', global_step.numpy()-1))
-        loaded_model = tf.saved_model.load(export_model)
+        export_pb = os.path.join(basedir, expname, '{}_{:06d}'.format('saved', global_step.numpy()-1))
+        loaded_model = tf.saved_model.load(export_pb)
         infer_model = loaded_model.signatures["serving_default"]
         print(list(loaded_model.signatures.keys()), infer_model.structured_outputs)  # ["serving_default"]
 
-        export_model_fine = os.path.join(basedir, expname, '{}_{:06d}'.format('saved_fine', global_step.numpy()-1))
-        loaded_model_fine = tf.saved_model.load(export_model_fine)
+        export_pb_fine = os.path.join(basedir, expname, '{}_{:06d}'.format('saved_fine', global_step.numpy()-1))
+        loaded_model_fine = tf.saved_model.load(export_pb_fine)
         infer_model_fine = loaded_model_fine.signatures["serving_default"]
         print(list(loaded_model_fine.signatures.keys()), infer_model_fine.structured_outputs)  # ["serving_default"]
 
@@ -726,10 +725,11 @@ def train():
 
         testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
         os.makedirs(testsavedir, exist_ok=True)
-        render_poses = render_poses[::40]    #step=40
+        render_poses = poses[107:108]    #choose one for testing
         print('test poses shape', render_poses.shape)
+        t = time.time()
         rgbs, _ = render_path(render_poses, hwf, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
-        print('Done rendering', testsavedir)
+        print('total rendering', time.time()-t, testsavedir)
         #imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
         return
