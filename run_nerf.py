@@ -1,6 +1,4 @@
 from load_blender import load_blender_data
-from load_deepvoxels import load_dv_data
-from load_llff import load_llff_data
 from run_nerf_helpers import *
 import time
 import random
@@ -75,7 +73,6 @@ def render_rays(ray_batch,
                 network_query_fn,
                 N_samples,
                 retraw=False,
-                lindisp=False,
                 perturb=0.,
                 N_importance=0,
                 network_fine=None,
@@ -95,7 +92,6 @@ def render_rays(ray_batch,
       network_query_fn: function used for passing queries to network_fn.
       N_samples: int. Number of different times to sample along each ray.
       retraw: bool. If True, include model's raw, unprocessed predictions.
-      lindisp: bool. If True, sample linearly in inverse depth rather than in depth.
       perturb: float, 0 or 1. If non-zero, each ray is sampled at stratified
         random points in time.
       N_importance: int. Number of additional times to sample along each ray.
@@ -202,13 +198,11 @@ def render_rays(ray_batch,
     # Decide where to sample along each ray. Under the logic, all rays will be sampled at
     # the same times.
     t_vals = tf.linspace(0., 1., N_samples)
-    if not lindisp:
-        # Space integration times linearly between 'near' and 'far'. Same
-        # integration points will be used for all rays.
-        z_vals = near * (1.-t_vals) + far * (t_vals)
-    #else:
-    #    # Sample linearly in inverse depth (disparity).
-    #    z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals))
+    
+    # Space integration times linearly between 'near' and 'far'. Same
+    # integration points will be used for all rays.
+    z_vals = near * (1.-t_vals) + far * (t_vals)
+
     z_vals = tf.broadcast_to(z_vals, [N_rays, N_samples])
 
     # Perturb sampling time along each ray.
@@ -231,7 +225,7 @@ def render_rays(ray_batch,
         raw = network_query_fn(pts, viewdirs, network_fn, load_model=False)  # [N_rays, N_samples, 4]
     #print('raw out', raw.shape)
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d)
-    N_importance = 0 #test code
+
     if N_importance > 0:
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
 
@@ -274,7 +268,7 @@ def replacenan(t):
 
 def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
     """Render rays in smaller minibatches to avoid OOM."""
-    print('rays_flat', rays_flat.shape)
+    #print('rays_flat', rays_flat.shape)
     all_ret = {}
     for i in range(0, rays_flat.shape[0], chunk):
         ret = render_rays(rays_flat[i:i+chunk], **kwargs)
@@ -336,9 +330,6 @@ def render(H, W, focal,
         viewdirs = tf.cast(tf.reshape(viewdirs, [-1, 3]), dtype=tf.float32)
 
     sh = rays_d.shape  # [..., 3]
-    #if ndc:
-    #    # for forward facing scenes
-    #    rays_o, rays_d = ndc_rays(H, W, focal, tf.cast(1., tf.float32), rays_o, rays_d)
 
     # Create ray batch
     rays_o = tf.cast(tf.reshape(rays_o, [-1, 3]), dtype=tf.float32)
@@ -449,11 +440,7 @@ def create_nerf(args):
         'raw_noise_std': args.raw_noise_std,
     }
 
-    # NDC only good for LLFF-style forward facing data
-    if args.dataset_type != 'llff' or args.no_ndc:
-        print('Not ndc!')
-        render_kwargs_train['ndc'] = False
-        render_kwargs_train['lindisp'] = args.lindisp
+    render_kwargs_train['ndc'] = False
 
     render_kwargs_test = {k: render_kwargs_train[k] for k in render_kwargs_train}
     render_kwargs_test['perturb'] = 0
@@ -572,18 +559,6 @@ def config_parser():
     parser.add_argument("--half_res", action='store_true',
                         help='load blender synthetic data at 400x400 instead of 800x800')
 
-    # llff flags
-    parser.add_argument("--factor", type=int, default=8,
-                        help='downsample factor for LLFF images')
-    parser.add_argument("--no_ndc", action='store_true',
-                        help='do not use normalized device coordinates (set for non-forward facing scenes)')
-    parser.add_argument("--lindisp", action='store_true',
-                        help='sampling linearly in disparity rather than depth')
-    parser.add_argument("--spherify", action='store_true',
-                        help='set for spherical 360 scenes')
-    parser.add_argument("--llffhold", type=int, default=8,
-                        help='will take every 1/N images as LLFF test set, paper uses 8')
-
     # logging/saving options
     parser.add_argument("--i_print",   type=int, default=100,
                         help='frequency of console printout and metric loggin')
@@ -614,33 +589,7 @@ def train():
         tf.compat.v1.set_random_seed(args.random_seed)
 
     # Load data
-    if args.dataset_type == 'llff':
-        images, poses, bds, render_poses, i_test = load_llff_data(args.datadir, args.factor,
-                                                                  recenter=True, bd_factor=.75,
-                                                                  spherify=args.spherify)
-        hwf = poses[0, :3, -1]
-        poses = poses[:, :3, :4]
-        print('Loaded llff', images.shape, render_poses.shape, hwf, args.datadir)
-        if not isinstance(i_test, list):
-            i_test = [i_test]
-
-        if args.llffhold > 0:
-            print('Auto LLFF holdout,', args.llffhold)
-            i_test = np.arange(images.shape[0])[::args.llffhold]
-
-        i_val = i_test
-        i_train = np.array([i for i in np.arange(int(images.shape[0])) if (i not in i_test and i not in i_val)])
-
-        print('DEFINING BOUNDS')
-        if args.no_ndc:
-            near = tf.reduce_min(input_tensor=bds) * .9
-            far = tf.reduce_max(input_tensor=bds) * 1.
-        else:
-            near = 0.
-            far = 1.
-        print('NEAR FAR', near, far)
-
-    elif args.dataset_type == 'blender':
+    if args.dataset_type == 'blender':
         images, poses, render_poses, hwf, i_split = load_blender_data(args.datadir, args.half_res, args.testskip)
         print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
         print(i_split)
@@ -652,17 +601,6 @@ def train():
             images = images[..., :3]*images[..., -1:] + (1.-images[..., -1:])
         else:
             images = images[..., :3]
-
-    elif args.dataset_type == 'deepvoxels':
-        images, poses, render_poses, hwf, i_split = load_dv_data(scene=args.shape, basedir=args.datadir, testskip=args.testskip)
-
-        print('Loaded deepvoxels', images.shape, render_poses.shape, hwf, args.datadir)
-        i_train, i_val, i_test = i_split
-
-        hemi_R = np.mean(np.linalg.norm(poses[:, :3, -1], axis=-1))
-        near = hemi_R-1.
-        far = hemi_R+1.
-
     else:
         print('Unknown dataset type', args.dataset_type, 'exiting')
         return
@@ -850,7 +788,8 @@ def train():
                 psnr0 = mse2psnr(img_loss0)
 
         gradients = tape.gradient(loss, grad_vars)
-        optimizer.apply_gradients(zip(gradients, grad_vars))
+        if gradients is not None:
+            optimizer.apply_gradients(zip(gradients, grad_vars))
 
         dt = time.time()-time0
 
